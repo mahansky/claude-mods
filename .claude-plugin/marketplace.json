@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-mods",
+  "description": "Personal Claude Code mods.",
+  "owner": { "name": "mahansky" },
+  "plugins": [
+    {
+      "name": "matrix-rain",
+      "description": "Green-tinted grays with a strip of digital rain along the top edge, in light and dark mode.",
+      "source": "./matrix-rain"
+    }
+  ]
+}

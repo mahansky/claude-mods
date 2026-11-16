@@ -1,0 +1,9 @@
+{
+  "name": "matrix-rain",
+  "version": "0.5.3",
+  "description": "Green-tinted grays with a strip of digital rain along the top edge, in light and dark mode.",
+  "author": {
+    "name": "mahansky",
+    "url": "https://github.com/mahansky"
+  }
+}
