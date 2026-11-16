@@ -36,16 +36,30 @@ const { theme, problems } = makeColors({
   },
 })
 
-const LOOK: ThemeSetArgs = {
-  colors: theme,
-  // Barely any frosting: below the strip the backdrop is plain surface-0, so
-  // thin panels cost no readability, and the rain shows through at the top.
-  backdrop: { scene: 'matrix-rain', glass: { blur: 0, opacity: 0.3 } },
-}
+// The rain is a scene the app keeps a share of a CPU core busy for as long as
+// it shows, whatever it draws, so it is a switch: /matrix on, /matrix off, or
+// /matrix to flip it. Off keeps the colors and drops the backdrop, which costs
+// nothing. The choice is kept in the mod's store, across sessions.
+const SCENE = 'matrix-rain'
+const KEY = 'rain'
+const COMMAND = 'matrix'
+
+const look = (rain: boolean): ThemeSetArgs =>
+  rain
+    ? {
+        colors: theme,
+        // Barely any frosting: below the strip the backdrop is plain surface-0, so
+        // thin panels cost no readability, and the rain shows through at the top.
+        backdrop: { scene: SCENE, glass: { blur: 0, opacity: 0.3 } },
+      }
+    : { colors: theme }
+
+// On unless switched off.
+const isOn = async ($: EngineInterface) => (await $.store.get(KEY)) !== false
 
 async function apply($: EngineInterface) {
   try {
-    const set = await $.theme.set(LOOK)
+    const set = await $.theme.set(look(await isOn($)))
 
     if (!set.isDrawn) {
       $.ui.status(set.reason)
@@ -64,6 +78,10 @@ export const register: Register = on => {
     if (unpainted !== undefined) {
       $.ui.toast(unpainted)
     }
+    await $.command.register({
+      name: COMMAND,
+      description: 'Matrix rain: on, off, or no argument to toggle (it costs ~30% of a CPU core while on)',
+    })
     await apply($)
     // On a hot reload the old copy unloads after this one starts and takes
     // the theme with it, so set it again once that has settled.
@@ -73,15 +91,35 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // And each turn, like theme-examples, so nothing can leave it bare for long.
-  on('prompt.submit', async ($, e, next) => {
-    await apply($)
+  // Each turn of the main conversation: picks up a switch made in another
+  // session, and puts the theme back if anything cleared it.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      await apply($)
+    }
 
     return next(e)
   })
 
+  on('command.run', { command: COMMAND }, async ($, e) => {
+    // A bare `/matrix` can arrive with no args at all.
+    const arg = (e.args ?? '').trim().toLowerCase()
+    if (arg !== '' && arg !== 'on' && arg !== 'off') {
+      return { text: 'Usage: /matrix on, /matrix off, or /matrix to toggle.' }
+    }
+    const rain = arg === '' ? !(await isOn($)) : arg === 'on'
+    await $.store.set(KEY, rain)
+    await apply($)
+
+    return {
+      text: rain
+        ? 'Matrix rain on. It keeps ~30% of a CPU core busy while it shows; /matrix off to stop it.'
+        : 'Matrix rain off. Colors stay; /matrix on to bring the rain back.',
+    }
+  })
+
   on('ui.render', { component: 'Backdrop' }, ($, e, next) => {
-    if (e.props.scene !== 'matrix-rain' || (e.surface !== 'desktop' && e.surface !== 'mobile')) {
+    if (e.props.scene !== SCENE || (e.surface !== 'desktop' && e.surface !== 'mobile')) {
       return next(e)
     }
     const { Svg } = $.ui.resolve(e)

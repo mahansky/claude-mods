@@ -12,9 +12,24 @@ while each column's head prints its way down, on three depth layers; now and
 then a stream runs all the way down the window. It draws in the desktop and
 mobile apps; the terminal draws no themes.
 
-Light on the machine: the glyphs never change, and only cover strips slide by
-CSS transform, so the scene costs about a millisecond of CPU a second. Motion
-stops when your system asks for reduced motion.
+Motion stops when your system asks for reduced motion.
+
+### On and off
+
+```
+/matrix on
+/matrix off
+/matrix
+```
+
+`/matrix` alone toggles. The choice is remembered across sessions, and other
+open sessions follow it at their next turn. Off keeps the green-tinted colors
+and drops only the rain.
+
+Why it's a switch: while any mod backdrop scene shows, the desktop app keeps
+roughly a third of a CPU core busy (measured on an Apple Silicon Mac: ~27%
+renderer and ~14% GPU process at idle), whatever the scene draws; even a single
+still image costs about the same. With the rain off, the theme costs nothing.
 
 ### Install
 

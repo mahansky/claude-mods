@@ -11,6 +11,10 @@
 //
 // Frame: a wide viewBox pinned to the top with `slice`, so height is nearly
 // always the binding side and the strip is a steady share of the window.
+// The layers sit in a nested <svg> the height of the strip: the cover strips
+// are tall, and without that clip each step repaints their whole height,
+// most of the window, instead of the strip alone.
+//
 // No masks (the app's renderer drops masked art), and no CSS variables in SVG
 // attributes (they only work inside CSS).
 
@@ -21,18 +25,26 @@ const HEIGHT = 1000 // viewBox height
 // Half-width katakana and digits. Nothing XML would read as markup (< > &).
 const GLYPHS = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789:=*+"'
 
+// One shared clock (10 Hz still reads as stepping, like a terminal): every step of every column lands on a tick of it, so the
+// scene changes at most this many times a second and the app redraws nothing
+// in between. Free-running columns change on nearly every frame, which costs
+// the app most of a CPU core.
+const CLOCK = 10 // ticks per second
+const TICK = 1 / CLOCK
+
 // Three depth layers, far to near. `cell` is the grid pitch, `fill` the share
-// of free columns that carry a stream (every head is drawn bright), `trail` the rows lit behind a head, `ticks` the seconds per row a
-// stream may run at, `rest` the dark rows before a column runs again.
+// of free columns that carry a stream (every head is drawn bright), `trail`
+// the rows lit behind a head, `ticks` the clock ticks per row a stream may run
+// at, `rest` the dark rows before a column runs again.
 const LAYERS = [
-  { font: 12, cell: 14, opacity: 0.35, fill: 0.85, trail: 14, rest: 6, ticks: [0.11, 0.15] },
-  { font: 17, cell: 20, opacity: 0.7, fill: 0.6, trail: 13, rest: 5, ticks: [0.08, 0.12] },
-  { font: 21, cell: 24, opacity: 0.95, fill: 0.3, trail: 11, rest: 6, ticks: [0.06, 0.09] },
+  { font: 12, cell: 14, opacity: 0.35, fill: 0.6, trail: 14, rest: 6, ticks: [2, 3] },
+  { font: 17, cell: 20, opacity: 0.7, fill: 0.6, trail: 13, rest: 5, ticks: [1, 2] },
+  { font: 21, cell: 24, opacity: 0.95, fill: 0.3, trail: 11, rest: 6, ticks: [1, 1] },
 ]
 // Runners: rare near-layer streams that run all the way down the window,
 // each on its own period; together about one every ~15s.
-const RUNNERS = [47, 59, 71, 83] // seconds between a runner's passes
-const RUNNER_TICK = 0.055
+const RUNNERS = [47, 59, 71, 83] // seconds between a runner's passes (whole seconds keep them on the clock)
+const RUNNER_TICKS = 1 // clock ticks per row
 const RUNNER_TRAIL = 16
 // ---------------------------------------------------------------------------
 
@@ -67,6 +79,29 @@ function cover(id: string, cell: number, trail: number, top: number, bottom: num
   stops += `<stop offset="${at(0)}" class="b" stop-opacity="0"/><stop offset="${at(cell)}" class="b" stop-opacity="0"/><stop offset="${at(cell)}" class="b"/><stop offset="1" class="b"/>`
 
   return `<linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">${stops}</linearGradient>`
+}
+
+// A layer's cover, as one repeating tile `period` tall: a trail stepping from
+// near opaque (top) to clear, the clear head row with its highlight, then
+// opaque to the end. Sliding the tiled cover down exactly one period and
+// jumping back is seamless, so a whole layer moves under one animation.
+function tile(id: string, cell: number, trail: number, period: number, opacity: number): string {
+  const at = (y: number) => fmt(y / period)
+  const head = trail * cell
+  let stops = ''
+  for (let i = trail; i >= 1; i -= 1) {
+    const o = fmt(((i - 1) / trail) ** 1.3)
+    const y = (trail - i) * cell
+    stops += `<stop offset="${at(y)}" class="b" stop-opacity="${o}"/><stop offset="${at(y + cell)}" class="b" stop-opacity="${o}"/>`
+  }
+  stops += `<stop offset="${at(head)}" class="b" stop-opacity="0"/><stop offset="${at(head + cell)}" class="b" stop-opacity="0"/><stop offset="${at(head + cell)}" class="b"/><stop offset="1" class="b"/>`
+
+  return (
+    `<linearGradient id="${id}g" x1="0" y1="0" x2="0" y2="1">${stops}</linearGradient>` +
+    `<pattern id="${id}" patternUnits="userSpaceOnUse" width="${cell}" height="${period}">` +
+    `<rect width="${cell}" height="${period}" fill="url(#${id}g)"/>` +
+    `<ellipse class="hl" opacity="${opacity}" cx="${cell / 2}" cy="${head + cell * 0.62}" rx="${cell * 0.42}" ry="${cell * 0.5}"/></pattern>`
+  )
 }
 
 export function buildRain(): string {
@@ -114,10 +149,11 @@ export function buildRain(): string {
   RUNNERS.forEach((cycle, i) => {
     const x = Math.round((WIDTH * (0.3 + rand() * 0.4)) / near.cell) * near.cell + near.cell / 2
     taken.push([x - near.cell / 2, x + near.cell / 2])
-    const active = fmt((100 * runSteps * RUNNER_TICK) / cycle)
+    const active = fmt((100 * runSteps * RUNNER_TICKS * TICK) / cycle)
     const travel = runSteps * near.cell
     css += `@keyframes r${i}{0%{transform:translateY(0);animation-timing-function:steps(${runSteps},end)}${active}%{transform:translateY(${travel}px)}100%{transform:translateY(${travel}px)}}`
-    css += `.r${i}{animation:r${i} ${cycle}s linear infinite;animation-delay:${fmt(-rand() * cycle)}s}`
+    const runDelay = Math.floor(rand() * cycle * CLOCK) * TICK
+    css += `.r${i}{animation:r${i} ${cycle}s linear infinite;animation-delay:-${runDelay.toFixed(6)}s}`
     const chars = glyphs(runRows)
     runners +=
       `<g class="run">${column(chars, near.cell, x)}` +
@@ -126,34 +162,43 @@ export function buildRain(): string {
   })
   css += `.run text{font-size:${near.font}px}`
 
-  // Layers, nearest claiming first, drawn far to near.
+  // Layers, nearest claiming first, drawn far to near. A column's phase is a
+  // fixed offset of its stripe of the layer's tiled cover, and columns of one
+  // speed share one animation, so the whole scene runs about ten. (One
+  // animation per column cost the app ~30% of a core: it does work for every
+  // running animation on every frame.)
   const drawn: string[] = []
   for (let li = LAYERS.length - 1; li >= 0; li -= 1) {
     const L = LAYERS[li]!
     const { cell } = L
     const rows = Math.ceil(STRIP / cell) + 1
     const steps = rows + L.trail + 1 + L.rest
-    const top = (steps + 1) * cell // covers the column even at the end of travel
-    const bottom = (rows + 2) * cell
-    defs += cover(`c${li}`, cell, L.trail, top, bottom)
-    css += `.L${li} text{font-size:${L.font}px}.L${li}{opacity:${L.opacity}}`
-    css += `@keyframes m${li}{from{transform:translateY(0)}to{transform:translateY(${steps * cell}px)}}`
-    css += `.L${li} .mv{animation:m${li} 3s steps(${steps},end) infinite}`
+    const period = steps * cell
+    defs += tile(`c${li}`, cell, L.trail, period, L.opacity)
+    // Each glyph and highlight is faded itself: opacity on a group makes the
+    // renderer paint it off-screen and blend it back on every update.
+    css += `.L${li} text{font-size:${L.font}px;fill-opacity:${L.opacity}}`
+    css += `@keyframes m${li}{from{transform:translateY(0)}to{transform:translateY(${period}px)}}`
 
-    let body = ''
+    let text = ''
+    const covers: string[] = L.ticks.map(() => '')
     for (let x = cell / 2; x < WIDTH; x += cell) {
       const span: [number, number] = [x - cell / 2, x + cell / 2]
       if (!isFree(...span) || rand() >= L.fill) continue
       taken.push(span)
-      const tick = L.ticks[Math.floor(rand() * L.ticks.length)]!
-      const dur = steps * tick
-      const chars = glyphs(rows)
-      const motion = `class="mv" style="animation-duration:${fmt(dur)}s;animation-delay:${fmt(-rand() * dur)}s"`
-      body +=
-        column(chars, cell, x) +
-        `<g ${motion}><rect x="${x - cell / 2}" y="${-top}" width="${cell}" height="${top + bottom}" fill="url(#c${li})"/>${head(cell, x)}</g>`
+      const si = Math.floor(rand() * L.ticks.length)
+      const phase = Math.floor(rand() * steps) * cell
+      text += column(glyphs(rows), cell, x)
+      // Tall enough to cover the column at every point of the slide.
+      covers[si] += `<rect transform="translate(0 ${phase})" x="${x - cell / 2}" y="${-2 * period}" width="${cell}" height="${2 * period + STRIP + cell}" fill="url(#c${li})"/>`
     }
-    drawn.unshift(`<g class="L L${li}">${body}</g>`)
+    let moving = ''
+    L.ticks.forEach((ticks, si) => {
+      if (covers[si] === '') return
+      css += `.s${li}${si}{animation:m${li} ${(steps * ticks * TICK).toFixed(6)}s steps(${steps},end) infinite}`
+      moving += `<g class="mv s${li}${si}">${covers[si]}</g>`
+    })
+    drawn.unshift(`<g class="L L${li}">${text}${moving}</g>`)
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" preserveAspectRatio="xMidYMin slice">
@@ -167,7 +212,9 @@ ${css}
 <stop offset="0" class="f0"/><stop offset=".55" class="f1"/><stop offset="1" class="f2"/>
 </linearGradient></defs>
 <rect width="${WIDTH}" height="${HEIGHT}" style="fill:var(--bg)"/>
+<svg x="0" y="0" width="${WIDTH}" height="${STRIP}" overflow="hidden">
 ${drawn.join('\n')}
+</svg>
 <rect width="${WIDTH}" height="${STRIP}" fill="url(#fade)"/>
 <rect y="${STRIP}" width="${WIDTH}" height="${HEIGHT - STRIP}" style="fill:var(--bg)"/>
 ${runners}
