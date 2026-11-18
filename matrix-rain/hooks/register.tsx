@@ -59,11 +59,10 @@ const isOn = async ($: EngineInterface) => (await $.store.get(KEY)) !== false
 
 async function apply($: EngineInterface) {
   try {
-    const set = await $.theme.set(look(await isOn($)))
-
-    if (!set.isDrawn) {
-      $.ui.status(set.reason)
-    }
+    // `isDrawn` is false in a session no theme-drawing window had attached to
+    // when the theme was set, yet a window that attaches later draws it all
+    // the same, so it is no reason to tell the person anything.
+    await $.theme.set(look(await isOn($)))
   } catch (error) {
     $.ui.toast(`matrix-rain: ${String(error)}`)
   }
@@ -78,6 +77,8 @@ export const register: Register = on => {
     if (unpainted !== undefined) {
       $.ui.toast(unpainted)
     }
+    // Clears the status line an earlier version left when no window drew it.
+    $.ui.status(undefined)
     await $.command.register({
       name: COMMAND,
       description: 'Matrix rain: on, off, or no argument to toggle (it costs ~30% of a CPU core while on)',
